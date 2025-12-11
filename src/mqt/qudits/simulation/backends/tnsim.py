@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import operator
 from functools import reduce
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import tensornetwork as tn  # type: ignore[import-not-found]
 from typing_extensions import Unpack
+
 
 from ...quantum_circuit.components.extensions.gate_types import GateTypes
 from ..jobs import Job, JobResult
@@ -32,23 +33,72 @@ class TNSim(Backend):
         description: str | None = None,
         **fields: Unpack[Backend.DefaultOptions],
     ) -> None:
+        if name is None:
+            name = "tnsim"
+        if description is None:
+            description = "Tensor network simulator (CPU/GPU) for efficient simulation of entangled states"
         super().__init__(provider, name=name, description=description, **fields)
+        self.use_gpu = False
+        self.backend = "numpy"  # Default to CPU
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Get state for pickling (exclude non-picklable module references)."""
+        state = self.__dict__.copy()
+        # Remove module references that can't be pickled
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore state from pickle."""
+        self.__dict__.update(state)
+        # Restore backend based on use_gpu flag
+        if self.use_gpu:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    tn.set_default_backend("pytorch")
+                else:
+                    tn.set_default_backend("pytorch")  # CPU PyTorch
+            except ImportError:
+                tn.set_default_backend("numpy")
+        else:
+            tn.set_default_backend("numpy")
 
     def __noise_model(self) -> NoiseModel | None:
         return self.noise_model
 
-    def run(self, circuit: QuantumCircuit, **options: Unpack[Backend.DefaultOptions]) -> Job:
+    def run(self, circuit: QuantumCircuit, use_gpu: bool = False, **options: Unpack[Backend.DefaultOptions]) -> Job:
         job = Job(self)
         self._options.update(options)
         self.noise_model: NoiseModel | None = self._options.get("noise_model", None)
-        self.shots = self._options.get("shots", 50)
+        self.shots = self._options.get("shots", 50 if self.noise_model else 1)
         self.memory = self._options.get("memory", False)
         self.full_state_memory = self._options.get("full_state_memory", False)
         self.file_path = self._options.get("file_path", None)
         self.file_name = self._options.get("file_name", None)
 
+        # Configure backend (CPU or GPU)
+        self.use_gpu = use_gpu
+        if use_gpu:
+            try:
+                import torch
+            except ImportError:
+                msg = "PyTorch is not installed. Install with: pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130"
+                raise ImportError(msg)
+            if torch.cuda.is_available():
+                tn.set_default_backend("pytorch")
+                self.backend = "pytorch"
+            else:
+                # Fallback to CPU PyTorch if GPU not available
+                tn.set_default_backend("pytorch")
+                self.backend = "pytorch"  # CPU PyTorch
+            print(f"TNSIM using backend: {self.backend} on devices: CUDA available: {torch.cuda.is_available()}")
+        else:
+            tn.set_default_backend("numpy")
+            self.backend = "numpy"
+            print(f"TNSIM using backend: {self.backend} on devices: N/A")
+
         if self.noise_model is not None:
-            assert self.shots >= 50, "Number of shots should be above 50"
+            assert self.shots >= 50, "Number of shots should be above 50 for noise simulation"
             job.set_result(JobResult(state_vector=self.execute(circuit), counts=stochastic_simulation(self, circuit)))
         else:
             job.set_result(JobResult(state_vector=self.execute(circuit), counts=[]))
@@ -83,7 +133,17 @@ class TNSim(Backend):
             for s in system_sizes:
                 z = [0] * s
                 z[0] = 1
-                state_nodes.append(tn.Node(np.array(z, dtype="complex")))
+                if self.use_gpu:
+                    try:
+                        import torch
+                        tensor = torch.tensor(z, dtype=torch.complex128)
+                        if torch.cuda.is_available():
+                            tensor = tensor.cuda()
+                        state_nodes.append(tn.Node(tensor))
+                    except ImportError:
+                        state_nodes.append(tn.Node(np.array(z, dtype="complex")))
+                else:
+                    state_nodes.append(tn.Node(np.array(z, dtype="complex")))
 
             qudits_legs = [node[0] for node in state_nodes]
 
@@ -117,4 +177,4 @@ class TNSim(Backend):
 
                 self.__apply_gate(qudits_legs, op_matrix, lines)
 
-        return tn.contractors.auto(all_nodes, output_edge_order=qudits_legs)
+        return tn.contractors.branch(all_nodes, output_edge_order=qudits_legs)

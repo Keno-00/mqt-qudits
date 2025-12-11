@@ -464,3 +464,41 @@ class TestTNSim(TestCase):
     def test_ion_ent_gates(self):  # noqa: PLR6301
         # TODO: Implement test for ion entity gates
         assert True
+
+    @staticmethod
+    def test_gpu_support():
+        """Test GPU support if PyTorch is available."""
+        try:
+            import torch  # noqa: F401
+            torch_available = True
+        except ImportError:
+            torch_available = False
+
+        provider = MQTQuditProvider()
+        backend = provider.get_backend("tnsim")
+
+        # Simple circuit
+        qreg_example = QuantumRegister("reg", 1, [2])
+        circuit = QuantumCircuit(qreg_example)
+        circuit.h(0)
+
+        # Test CPU
+        job_cpu = backend.run(circuit, use_gpu=False)
+        result_cpu = job_cpu.result()
+        state_cpu = result_cpu.get_state_vector()
+
+        if torch_available:
+            # Test GPU if available
+            job_gpu = backend.run(circuit, use_gpu=True)
+            result_gpu = job_gpu.result()
+            state_gpu = result_gpu.get_state_vector()
+
+            # Results should be the same
+            assert np.allclose(state_cpu, state_gpu)
+        else:
+            # If PyTorch not available, use_gpu=True should raise ImportError
+            try:
+                backend.run(circuit, use_gpu=True)
+                assert False, "Expected ImportError for missing PyTorch"
+            except ImportError:
+                pass  # Expected

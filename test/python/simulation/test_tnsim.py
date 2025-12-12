@@ -467,12 +467,12 @@ class TestTNSim(TestCase):
 
     @staticmethod
     def test_gpu_support():
-        """Test GPU support if PyTorch is available."""
+        """Test GPU support if JAX is available."""
         try:
-            import torch  # noqa: F401
-            torch_available = True
+            import jax  # noqa: F401
+            jax_available = True
         except ImportError:
-            torch_available = False
+            jax_available = False
 
         provider = MQTQuditProvider()
         backend = provider.get_backend("tnsim")
@@ -487,7 +487,7 @@ class TestTNSim(TestCase):
         result_cpu = job_cpu.result()
         state_cpu = result_cpu.get_state_vector()
 
-        if torch_available:
+        if jax_available:
             # Test GPU if available
             job_gpu = backend.run(circuit, use_gpu=True)
             result_gpu = job_gpu.result()
@@ -496,9 +496,9 @@ class TestTNSim(TestCase):
             # Results should be the same
             assert np.allclose(state_cpu, state_gpu)
         else:
-            # If PyTorch not available, use_gpu=True should raise ImportError
+            # If JAX not available, use_gpu=True should raise ImportError
             try:
                 backend.run(circuit, use_gpu=True)
-                assert False, "Expected ImportError for missing PyTorch"
+                assert False, "Expected ImportError for missing JAX"
             except ImportError:
                 pass  # Expected

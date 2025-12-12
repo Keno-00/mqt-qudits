@@ -53,11 +53,9 @@ class TNSim(Backend):
         # Restore backend based on use_gpu flag
         if self.use_gpu:
             try:
-                import torch
-                if torch.cuda.is_available():
-                    tn.set_default_backend("pytorch")
-                else:
-                    tn.set_default_backend("pytorch")  # CPU PyTorch
+                import jax
+                import jax.numpy as jnp
+                tn.set_default_backend("jax")
             except ImportError:
                 tn.set_default_backend("numpy")
         else:
@@ -80,18 +78,14 @@ class TNSim(Backend):
         self.use_gpu = use_gpu
         if use_gpu:
             try:
-                import torch
+                import jax
+                import jax.numpy as jnp
             except ImportError:
-                msg = "PyTorch is not installed. Install with: pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130"
+                msg = "JAX is not installed. Install with: pip install jax jaxlib"
                 raise ImportError(msg)
-            if torch.cuda.is_available():
-                tn.set_default_backend("pytorch")
-                self.backend = "pytorch"
-            else:
-                # Fallback to CPU PyTorch if GPU not available
-                tn.set_default_backend("pytorch")
-                self.backend = "pytorch"  # CPU PyTorch
-            print(f"TNSIM using backend: {self.backend} on devices: CUDA available: {torch.cuda.is_available()}")
+            tn.set_default_backend("jax")
+            self.backend = "jax"
+            print(f"TNSIM using backend: {self.backend} on devices: JAX available")
         else:
             tn.set_default_backend("numpy")
             self.backend = "numpy"
@@ -135,10 +129,8 @@ class TNSim(Backend):
                 z[0] = 1
                 if self.use_gpu:
                     try:
-                        import torch
-                        tensor = torch.tensor(z, dtype=torch.complex128)
-                        if torch.cuda.is_available():
-                            tensor = tensor.cuda()
+                        import jax.numpy as jnp
+                        tensor = jnp.array(z, dtype=jnp.complex128)
                         state_nodes.append(tn.Node(tensor))
                     except ImportError:
                         state_nodes.append(tn.Node(np.array(z, dtype="complex")))

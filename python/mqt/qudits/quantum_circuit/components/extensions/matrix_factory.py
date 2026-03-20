@@ -14,7 +14,9 @@ import typing
 from functools import reduce
 
 import numpy as np
-from scipy.sparse import csr_matrix, identity as sparse_identity, kron as sparse_kron  # type: ignore[import-not-found]
+from scipy.sparse import csr_matrix  # type: ignore[import-not-found]
+from scipy.sparse import identity as sparse_identity
+from scipy.sparse import kron as sparse_kron
 
 if typing.TYPE_CHECKING:
     from numpy.typing import NDArray

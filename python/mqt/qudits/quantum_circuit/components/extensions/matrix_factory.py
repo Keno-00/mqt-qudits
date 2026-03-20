@@ -14,6 +14,7 @@ import typing
 from functools import reduce
 
 import numpy as np
+from scipy.sparse import csr_matrix, identity as sparse_identity, kron as sparse_kron  # type: ignore[import-not-found]
 
 if typing.TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -23,9 +24,10 @@ if typing.TYPE_CHECKING:
 
 
 class MatrixFactory:
-    def __init__(self, gate: Gate, identities_flag: int) -> None:
+    def __init__(self, gate: Gate, identities_flag: int, sparse: bool = False) -> None:
         self.gate: Gate = gate
         self.ids: int = identities_flag
+        self.sparse: bool = sparse
 
     def generate_matrix(self) -> NDArray[np.complex128]:
         matrix = self.gate.__array__()
@@ -45,15 +47,19 @@ class MatrixFactory:
             # control library
 
             matrix = MatrixFactory.apply_identities_and_controls(
-                matrix, self.gate.target_qudits, dimensions_slice, ref_slice, controls, ctrl_levs
+                matrix, self.gate.target_qudits, dimensions_slice, ref_slice, controls, ctrl_levs, self.sparse
             )
         elif self.ids > 0:
             matrix = MatrixFactory.apply_identities_and_controls(
-                matrix, self.gate.target_qudits, dimensions_slice, ref_slice
+                matrix, self.gate.target_qudits, dimensions_slice, ref_slice, None, None, self.sparse
             )
 
         if self.ids >= 2:
-            matrix = MatrixFactory.wrap_in_identities(matrix, lines, circuit.dimensions)
+            matrix = MatrixFactory.wrap_in_identities(matrix, lines, circuit.dimensions, self.sparse)
+
+        # If sparse flag is set but no identities/controls applied, convert to sparse
+        if self.sparse and self.ids == 0 and control_info is None:
+            matrix = csr_matrix(matrix)
 
         return matrix
 
@@ -66,7 +72,9 @@ class MatrixFactory:
         ref_lines: list[int],
         controls: list[int] | None = None,
         controls_levels: list[int] | None = None,
+        sparsity_flag: bool = False,
     ) -> NDArray[np.complex128]:
+        matrix = csr_matrix(matrix)
         # dimensions = list(reversed(dimensions))
         # Convert qudits_applied and dimensions to lists if they are not already
         qudits_applied = [qudits_applied] if isinstance(qudits_applied, int) else qudits_applied
@@ -79,7 +87,9 @@ class MatrixFactory:
             msg = "Dimensions cannot be an empty list"
             raise ValueError(msg)
         if len(qudits_applied) == len(ref_lines) and controls is None:
-            return matrix
+            if sparsity_flag:
+                return matrix
+            return matrix.toarray()
 
         if controls is not None:
             slide_controls = [q - min(ref_lines) for q in controls]
@@ -102,10 +112,12 @@ class MatrixFactory:
         global_states_space = [list(element) for element in itertools.product(*global_single_site_logics)]
         global_index_to_state = dict(enumerate(global_states_space))
 
-        result = np.identity(reduce(operator.mul, dimensions, 1), dtype=np.complex128)
+        shape = reduce(operator.mul, dimensions, 1)
+        result = sparse_identity(shape, dtype=np.complex128, format="csr")
+        result = result.tolil()
 
-        for r in range(result.shape[0]):
-            for c in range(result.shape[1]):
+        for r in range(shape):
+            for c in range(shape):
                 if controls is not None:
                     extract_r = operator.itemgetter(*slide_controls)(global_index_to_state[r])
                     extract_c = operator.itemgetter(*slide_controls)(global_index_to_state[c])
@@ -146,28 +158,31 @@ class MatrixFactory:
                     value = matrix[matrix_row, matrix_col]
                     result[r, c] = value
 
-        return result
+        if sparsity_flag:
+            return result.tocsr()
+        return result.toarray()
 
     @classmethod
     def wrap_in_identities(
-        cls, matrix: NDArray[np.complex128], indices: list[int], sizes: list[int]
+        cls, matrix: NDArray[np.complex128], indices: list[int], sizes: list[int], sparsity_flag: bool = False
     ) -> NDArray[np.complex128]:
+        matrix = csr_matrix(matrix)
         indices.sort()
         if any(index >= len(sizes) for index in indices):
             msg = "Index out of range"
             raise ValueError(msg)
 
         i = 0
-        result = np.identity(sizes[i], dtype=np.complex128)
+        result = sparse_identity(sizes[i], dtype=np.complex128, format="csr")
         while i < len(sizes):
             if i == indices[0]:
-                result = matrix if i == 0 else np.kron(result, matrix).astype(np.complex128)
+                result = matrix if i == 0 else sparse_kron(result, matrix)
             elif (i < indices[0] and i != 0) or i > indices[-1]:
-                result = np.kron(result, np.identity(sizes[i], dtype=np.complex128)).astype(np.complex128)
+                result = sparse_kron(result, sparse_identity(sizes[i], dtype=np.complex128, format="csr"))
 
             i += 1
 
-        return result
+        return csr_matrix(result) if sparsity_flag else result.toarray()
 
 
 def from_dirac_to_basis(vec: list[int], d: list[int] | int) -> NDArray[np.complex128]:
